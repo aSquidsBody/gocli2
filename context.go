@@ -17,6 +17,8 @@ type Context struct {
 	helpStr string
 
 	commandStr string
+
+	Value interface{}
 }
 
 // GetHelpStr returns the same help text that is printed when "--help" or "-h" are included.
@@ -135,8 +137,8 @@ func populateArgumentsAndOptions(args []string, optionsMap map[string]*option, a
 	return nil
 }
 
-func buildContext(c *Command, args []string) Context {
-	ctx := Context{commandStr: c.fullName()}
+func buildContext(c *Command, args []string, ctx *Context) {
+	ctx.commandStr = c.fullName()
 	optionsMap := buildOptionsMap(c)
 	ctx.arguments = buildArguments(c)
 	ctx.helpStr = getHelpStr(optionsMap, ctx.arguments, c)
@@ -152,8 +154,6 @@ func buildContext(c *Command, args []string) Context {
 		os.Exit(1)
 	}
 	ctx.options = optionsMapToArray(optionsMap)
-
-	return ctx
 }
 
 func hasHelp(args []string) (int, bool) {

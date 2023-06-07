@@ -28,7 +28,9 @@ type Command struct {
 	Arguments interface{}
 
 	// Behavior of the command
-	Behavior func(ctx Context)
+	Behavior func(ctx *Context)
+
+	Middleware func(ctx *Context)
 
 	node *commandNode
 }
@@ -40,10 +42,10 @@ func (c *Command) fullName() string {
 	return filepath.Base(os.Args[0])
 }
 
-func (c *Command) exec(args []string) {
+func (c *Command) exec(args []string, ctx *Context) {
 
 	// build the context
-	ctx := buildContext(c, args)
+	buildContext(c, args, ctx)
 
 	c.Behavior(ctx)
 }

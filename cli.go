@@ -64,15 +64,18 @@ func (c *cli) Exec() {
 	}
 
 	node := c.root
+	ctx := &Context{}
 	for {
+		if node.value.Middleware != nil {
+			node.value.Middleware(ctx)
+		}
 		sca := getSubCommandArg(args)
 		if node.hasChild(sca.subCommand) {
 			node = node.children[sca.subCommand]
 			args = sca.args
 			continue
 		}
-
-		node.value.exec(args)
+		node.value.exec(args, ctx)
 		return
 	}
 }
@@ -103,7 +106,7 @@ func newCommandNode(parent *commandNode, command *Command) *commandNode {
 	}
 
 	if command.Behavior == nil {
-		command.Behavior = func(ctx Context) {
+		command.Behavior = func(ctx *Context) {
 			fmt.Println(ctx.GetHelpStr())
 		}
 	}
