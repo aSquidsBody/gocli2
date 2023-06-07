@@ -1,6 +1,7 @@
 package gocli
 
 import (
+	"fmt"
 	"os"
 )
 
@@ -10,7 +11,7 @@ type cli struct {
 }
 
 func NewCli(root *Command) *cli {
-	if err := validateCommand(root); err != nil {
+	if err := validateRoot(root); err != nil {
 		fatal(err)
 	}
 
@@ -58,6 +59,10 @@ func (cli *cli) hasCommand(c *Command) (exists bool) {
 
 func (c *cli) Exec() {
 	args := os.Args[1:]
+	if i, ok := hasHelp(args); ok {
+		args[i], args[len(args)-1] = args[len(args)-1], args[i]
+	}
+
 	node := c.root
 	for {
 		sca := getSubCommandArg(args)
@@ -88,6 +93,19 @@ func newCommandNode(parent *commandNode, command *Command) *commandNode {
 
 	if parent != nil {
 		parent.children[command.Name] = node
+
+		for _, alias := range command.Aliases {
+			if _, exists := parent.children[alias]; exists {
+				fatal(newError("Command '%s' has two identical children/aliases '%s'. This is not allowed", parent.value.Name, alias))
+			}
+			parent.children[alias] = node
+		}
+	}
+
+	if command.Behavior == nil {
+		command.Behavior = func(ctx Context) {
+			fmt.Println(ctx.GetHelpStr())
+		}
 	}
 
 	return node
@@ -108,7 +126,7 @@ func getSubCommandArg(args []string) subCommandArg {
 		return subCommandArg{"", []string{}}
 	}
 
-	if isOption(args[0]) {
+	if _, is := isOption(args[0]); is {
 		return subCommandArg{"", args}
 	}
 

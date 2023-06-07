@@ -5,6 +5,7 @@ import (
 	"os"
 	"reflect"
 	"sort"
+	"strconv"
 	"strings"
 )
 
@@ -65,42 +66,106 @@ func populateInterface(m map[string]interface{}, i interface{}) {
 	}
 }
 
+func getNext(idx int, args []string) (interface{}, error) {
+	if len(args) == idx+1 {
+		return nil, fmt.Errorf("Missing value for option '%s'.", Cyan(args[idx]))
+	}
+
+	if _, is := isOption(args[idx+1]); is {
+		return nil, fmt.Errorf("Missing value for option '%s'", Cyan(args[idx]))
+	}
+
+	return args[idx+1], nil
+}
+
+func populateArgumentsAndOptions(args []string, optionsMap map[string]*option, arguments []*argument) error {
+	idx := 0
+	argumentIdx := 0
+	for idx < len(args) {
+		if arg, ok := isOption(args[idx]); ok {
+			opt, exists := optionsMap[arg]
+			if !exists {
+				return fmt.Errorf("Unexpected option '%s'.", Cyan(args[idx]))
+			}
+			if opt.kind == reflect.Bool {
+				opt.value = true
+				opt.populated = true
+			} else {
+				nextValue, err := getNext(idx, args)
+				if err != nil {
+					return err
+				}
+				opt.value, err = cast(nextValue, opt.kind)
+				if err != nil {
+					return fmt.Errorf("Invalid value for '%s'. %s", args[idx], err.Error())
+				}
+				opt.populated = true
+				idx++
+			}
+		} else {
+			if argumentIdx >= len(arguments) {
+				return fmt.Errorf("Unexpected argument '%s'", args[idx])
+			}
+			argument := arguments[argumentIdx]
+			value, err := cast(args[idx], argument.kind)
+			if err != nil {
+				return fmt.Errorf("Invalid value for '%s'. %s", argument.name, err.Error())
+			}
+			argument.value = value
+			argument.populated = true
+			argumentIdx++
+		}
+		idx++
+	}
+
+	// check for missing arguments
+	for _, argument := range arguments {
+		if argument.required && !argument.populated {
+			return fmt.Errorf("Missing or empty argument '%s'.", Yellow(argument.name))
+		}
+	}
+
+	// check for missing options
+	for _, option := range optionsMap {
+		if option.required && !option.populated {
+			return fmt.Errorf("Missing or empty option: '%s'.", Yellow(fmt.Sprintf("--%s", option.long)))
+		}
+	}
+
+	return nil
+}
+
 func buildContext(c *Command, args []string) Context {
 	ctx := Context{commandStr: c.fullName()}
 	optionsMap := buildOptionsMap(c)
 	ctx.arguments = buildArguments(c)
 	ctx.helpStr = getHelpStr(optionsMap, ctx.arguments, c)
 
-	if hasHelp(args) {
+	if _, ok := hasHelp(args); ok {
 		fmt.Println(ctx.helpStr)
 		os.Exit(0)
 	}
 
-	args, err := populateOptionsMap(optionsMap, args)
+	err := populateArgumentsAndOptions(args, optionsMap, ctx.arguments)
 	if err != nil {
 		fmt.Println(err)
 		os.Exit(1)
 	}
 	ctx.options = optionsMapToArray(optionsMap)
 
-	err = populateArguments(ctx.arguments, args)
-	if err != nil {
-		fmt.Println(err)
-		os.Exit(1)
-	}
-
 	return ctx
 }
 
-func hasHelp(args []string) bool {
+func hasHelp(args []string) (int, bool) {
 	// check for help field
-	for _, arg := range args {
+	for i := len(args) - 1; i >= 0; i-- {
+		arg := args[i]
 		if strings.HasPrefix(arg, "-h=") || strings.HasPrefix(arg, "--help=") || arg == "-h" || arg == "--help" {
-			return true
+			return i, true
 		}
 	}
 
-	return false
+	return -1, false
 }
 
 type Bylong []*option
@@ -118,7 +183,7 @@ func getHelpStr(optionsMap map[string]*option, arguments []*argument, c *Command
 
 	txt += fmt.Sprintf("Usage: %s", c.fullName())
 	if len(c.node.children) > 0 {
-		txt += " [COMMAND]"
+		txt += " [" + Magenta("COMMAND") + "]"
 	}
 
 	if len(options) > 0 {
@@ -141,15 +206,21 @@ func getHelpStr(optionsMap map[string]*option, arguments []*argument, c *Command
 	txt += Sep()
 
 	if len(c.node.children) > 0 {
+
 		txt += "Commands:" + Sep()
 
 		maxWidth := 0
+		commandNames := map[*commandNode]string{}
 		for _, child := range c.node.children {
-			maxWidth = max(len(child.value.Name), maxWidth)
+			if _, seen := commandNames[child]; !seen {
+				name := helpName(child.value)
+				maxWidth = max(len(name), maxWidth)
+				commandNames[child] = name
+			}
 		}
 		width := maxWidth + padding
-		for _, child := range c.node.children {
-			txt += "  " + paddedName(child.value.Name, width) + child.value.ShortDesc + Sep()
+		for child, name := range commandNames {
+			txt += "  " + paddedName(name, width) + child.value.ShortDesc + Sep()
 		}
 
 		txt += Sep()
@@ -190,6 +261,17 @@ func getHelpStr(optionsMap map[string]*option, arguments []*argument, c *Command
 		}
 	}
 	return txt
+}
+
+func helpName(c *Command) string {
+	result := Magenta(c.Name)
+	if c.Aliases != nil {
+		for i := range c.Aliases {
+			c.Aliases[i] = Magenta(c.Aliases[i])
+		}
+		result += " (" + strings.Join(c.Aliases, ",") + ")"
+	}
+	return result
 }
 
 func max(i, j int) int {
@@ -244,4 +326,87 @@ func optionTypeHelp(v valued) string {
 	}
 
 	return "UNKNOWN (please check option definition)"
+}
+
+func cast(v interface{}, kind reflect.Kind) (interface{}, error) {
+	switch kind {
+	case reflect.Bool:
+		return true, nil
+	case reflect.String:
+		return v.(string), nil
+	case reflect.Int:
+		i, ok := v.(int)
+		if ok {
+			return i, nil
+		}
+		i, err := strconv.Atoi(v.(string))
+		if err != nil {
+			return nil, fmt.Errorf("Expected an integer, got '%s'", v)
+		}
+		return i, nil
+	case reflect.Int8:
+		i, ok := v.(int8)
+		if ok {
+			return i, nil
+		}
+		in, err := strconv.Atoi(v.(string))
+		if err != nil {
+			return nil, fmt.Errorf("Expected an integer, got '%s'", v)
+		}
+		return int8(in), nil
+	case reflect.Int16:
+		i, ok := v.(int16)
+		if ok {
+			return i, nil
+		}
+		in, err := strconv.Atoi(v.(string))
+		if err != nil {
+			return nil, fmt.Errorf("Expected an integer, got '%s'", v)
+		}
+		return int16(in), nil
+	case reflect.Int32:
+		i, ok := v.(int32)
+		if ok {
+			return i, nil
+		}
+		in, err := strconv.Atoi(v.(string))
+		if err != nil {
+			return nil, fmt.Errorf("Expected an integer, got '%s'", v)
+		}
+		return int32(in), nil
+	case reflect.Int64:
+		i, ok := v.(int64)
+		if ok {
+			return i, nil
+		}
+		in, err := strconv.Atoi(v.(string))
+		if err != nil {
+			return nil, fmt.Errorf("Expected an integer, got '%s'", v)
+		}
+		return int64(in), nil
+	case reflect.Float32:
+		f, ok := v.(float32)
+		if ok {
+			return f, nil
+		}
+
+		fl, err := strconv.ParseFloat(v.(string), 32)
+		if err != nil {
+			return nil, fmt.Errorf("Expected a float, got '%s'", v)
+		}
+		return float32(fl), nil
+	case reflect.Float64:
+		f, ok := v.(float64)
+		if ok {
+			return f, nil
+		}
+
+		fl, err := strconv.ParseFloat(v.(string), 32)
+		if err != nil {
+			return nil, fmt.Errorf("Expected a float, got '%s'", v)
+		}
+		return fl, nil
+	default:
+		return nil, fmt.Errorf("Could not parse value %+v", v)
+	}
 }

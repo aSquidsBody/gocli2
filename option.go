@@ -33,12 +33,16 @@ func (o *option) setValue(i interface{}) {
 	o.value = i
 }
 
-func isOption(arg string) bool {
-	if len(arg) <= 0 {
-		return false
+func isOption(arg string) (string, bool) {
+	if isLongFlag(arg) {
+		return arg[2:], true
 	}
 
-	return arg[0] != '-'
+	if isShortFlag(arg) {
+		return arg[1:], true
+	}
+
+	return "", false
 }
 
 func validateOptions(options interface{}) error {
@@ -125,8 +129,8 @@ func buildOptionsMap(c *Command) map[string]*option {
 			opt.description = description
 		}
 
+		opt.value, _ = cast(optionsDefValue.Field(idx).Interface(), opt.kind)
 		optionsMap[opt.long] = opt
-		setValue(opt, optionsDefValue.Field(idx).Interface())
 	}
 
 	return optionsMap
@@ -143,76 +147,6 @@ func getEqualsSides(input string) (string, string, bool) {
 	}
 
 	return "", "", false
-}
-
-func populateOptionsMap(optionsMap map[string]*option, args []string) (remaining []string, err error) {
-	defer func() {
-		for _, option := range optionsMap {
-			if option.required && !option.populated {
-				err = newError("Missing or empty option: '%s'.", Yellow(fmt.Sprintf("--%s", option.long)))
-				return
-			}
-		}
-	}()
-
-	temp := []string{}
-	for _, arg := range args {
-		if left, right, hasEquals := getEqualsSides(arg); hasEquals {
-			temp = append(temp, left, right)
-		} else {
-			temp = append(temp, arg)
-		}
-	}
-	args = temp
-
-	var prev *option
-	for i, arg := range args {
-		if isShortFlag(arg) {
-			current, exists := optionsMap[arg[1:]]
-			if !exists {
-				err = newError("Invalid option: '%s'", Yellow(fmt.Sprintf("-%s", arg[1:])))
-				return
-			}
-			if current.kind == reflect.Bool {
-				current.value = true
-				current.populated = true
-				prev = nil
-			} else {
-				prev = current
-			}
-
-		} else if isLongFlag(arg) {
-			current, exists := optionsMap[arg[2:]]
-			if !exists {
-				err = newError("Invalid option: '%s'", Yellow(fmt.Sprintf("--%s", arg[2:])))
-				return
-			}
-			if current.kind == reflect.Bool {
-				current.value = true
-				current.populated = true
-				prev = nil
-			} else {
-				prev = current
-			}
-
-		} else { // is not an option flag, must be an argument.
-
-			// if there is no previous option, then return the remaining arguments
-			if prev == nil {
-				remaining = args[i:]
-				return
-			}
-
-			// the current arg must be a value for the previous option flag
-			setValue(prev, arg)
-			prev.populated = true
-			prev = nil
-		}
-	}
-
-	remaining = []string{}
-
-	return
 }
 
 func optionsMapToArray(optionsMap map[string]*option) []*option {

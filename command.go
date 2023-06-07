@@ -11,6 +11,9 @@ type Command struct {
 	// Name of the command (as referenced in the CLI)
 	Name string
 
+	// Aliases for the command
+	Aliases []string
+
 	// Description that is shown when "--help" is present
 	LongDesc string
 
@@ -45,14 +48,22 @@ func (c *Command) exec(args []string) {
 	c.Behavior(ctx)
 }
 
-func validateCommand(c *Command) error {
-	if c == nil {
-		return newSetupError("Received nil Command definition")
+func validateRoot(c *Command) error {
+	if len(c.Aliases) > 0 {
+		return newSetupError("Root command cannot have aliases.")
 	}
 
+	return validateCommand(c)
+}
+
+func validateCommand(c *Command) error {
 	if c.Name == "" {
 		return newSetupError("Received Command definition with an empty name")
 	}
 
-	return validateOptions(&(c.Options))
+	if c.Options != nil {
+		return validateOptions(&(c.Options))
+	}
+
+	return nil
 }
