@@ -66,8 +66,10 @@ func (c *cli) Exec() {
 	node := c.root
 	ctx := &Context{}
 	for {
-		if node.value.Middleware != nil {
-			node.value.Middleware(ctx)
+		if node.value.Middleware != nil && len(node.value.Middleware) > 0 {
+			for _, middleware := range node.value.Middleware {
+				middleware(ctx)
+			}
 		}
 		sca := getSubCommandArg(args)
 		if node.hasChild(sca.subCommand) {

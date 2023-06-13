@@ -30,10 +30,12 @@ type Command struct {
 	// Behavior of the command
 	Behavior func(ctx *Context)
 
-	Middleware func(ctx *Context)
+	Middleware []Middleware
 
 	node *commandNode
 }
+
+type Middleware func(ctx *Context)
 
 func (c *Command) fullName() string {
 	if c.node.parent != nil {

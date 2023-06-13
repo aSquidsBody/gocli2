@@ -174,6 +174,12 @@ func (b Bylong) Len() int           { return len(b) }
 func (b Bylong) Swap(i, j int)      { b[i], b[j] = b[j], b[i] }
 func (b Bylong) Less(i, j int) bool { return b[i].long < b[j].long }
 
+type Byfirst [][]string
+
+func (b Byfirst) Len() int           { return len(b[0]) }
+func (b Byfirst) Swap(i, j int)      { b[i], b[j] = b[j], b[i] }
+func (b Byfirst) Less(i, j int) bool { return b[i][0] < b[j][0] }
+
 func getHelpStr(optionsMap map[string]*option, arguments []*argument, c *Command) string {
 	options := optionsMapToArray(optionsMap)
 	sort.Sort(Bylong(options))
@@ -209,18 +215,24 @@ func getHelpStr(optionsMap map[string]*option, arguments []*argument, c *Command
 
 		txt += "Commands:" + Sep()
 
+		commands := [][]string{}
+
 		maxWidth := 0
 		commandNames := map[*commandNode]string{}
 		for _, child := range c.node.children {
 			if _, seen := commandNames[child]; !seen {
+				maxWidth = max(helpNameWidth(child.value), maxWidth)
 				name := helpName(child.value)
-				maxWidth = max(len(name), maxWidth)
 				commandNames[child] = name
 			}
 		}
 		width := maxWidth + padding
 		for child, name := range commandNames {
-			txt += "  " + paddedName(name, width) + child.value.ShortDesc + Sep()
+			commands = append(commands, []string{child.value.Name, paddedNameByLength(name, width, helpNameWidth(child.value)) + child.value.ShortDesc + Sep()})
+		}
+		sort.Sort(Byfirst(commands))
+		for _, pair := range commands {
+			txt += "  " + pair[1]
 		}
 
 		txt += Sep()
@@ -266,12 +278,22 @@ func getHelpStr(optionsMap map[string]*option, arguments []*argument, c *Command
 func helpName(c *Command) string {
 	result := Magenta(c.Name)
 	if c.Aliases != nil {
-		for i := range c.Aliases {
-			c.Aliases[i] = Magenta(c.Aliases[i])
+		aliases := make([]string, len(c.Aliases))
+		copy(aliases, c.Aliases)
+		for i := range aliases {
+			aliases[i] = Magenta(aliases[i])
 		}
-		result += " (" + strings.Join(c.Aliases, ",") + ")"
+		result += " (" + strings.Join(aliases, ",") + ")"
 	}
 	return result
+}
+
+func helpNameWidth(c *Command) int {
+	result := c.Name
+	if c.Aliases != nil {
+		result += " (" + strings.Join(c.Aliases, ",") + ")"
+	}
+	return len(result)
 }
 
 func max(i, j int) int {
@@ -280,6 +302,14 @@ func max(i, j int) int {
 	}
 
 	return j
+}
+
+func paddedNameByLength(name string, width int, nameLength int) (p string) {
+	p += name
+	for i := 0; i < width-nameLength; i++ {
+		p += " "
+	}
+	return p
 }
 
 func paddedName(name string, width int) (p string) {
@@ -331,7 +361,7 @@ func optionTypeHelp(v valued) string {
 func cast(v interface{}, kind reflect.Kind) (interface{}, error) {
 	switch kind {
 	case reflect.Bool:
-		return true, nil
+		return v.(bool), nil
 	case reflect.String:
 		return v.(string), nil
 	case reflect.Int:
