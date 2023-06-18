@@ -12,120 +12,152 @@ import (
 	"golang.org/x/crypto/ssh/terminal"
 )
 
-type BashResult struct {
-	Stdout string `json:"stdout"`
-	Stderr string `json:"stderr"`
-	Err    error  `json:"err"`
+type BashProcess struct {
+	command       *exec.Cmd
+	stdinReader   *stdinReader
+	stdoutHandler StdHandler
+	stderrHandler StdHandler
+	running       bool
 }
 
-// Run a bash command and return the stdout & stderr in a
-// BashResult struct
-func Bash(cmd string) (res BashResult) {
-	res.Stdout, res.Stderr, res.Err = runBash(cmd, false, false, "")
-	return
+// StdHandler is a user defined function to handle the contents of cmd.Stdout and
+// cmd.Stderr.
+type StdHandler func(line []byte) error
+
+// customStdWriter implements io.Writer. It is a custom resource that will take the
+// place of os.Stdout/os.Stderr to allow for custom processing of the cmd output.
+type customStdWriter struct {
+	handler StdHandler
 }
 
-// Run a bash command, stream the stdout and/or stderr, and
-// return the stdout & stderr in a BashResult stuct
-func BashStream(cmd string, stdout bool, stderr bool) (res BashResult) {
-	res.Stdout, res.Stderr, res.Err = runBash(cmd, stdout, stderr, "")
-	return
+func (c *customStdWriter) Write(p []byte) (int, error) {
+	if err := c.handler(p); err != nil {
+		return 0, err
+	}
+
+	return len(p), nil
 }
 
-// Run a bash command, stream the stdout and/or stderr with a custom label,
-// and return the stdout & stderr in a BashResult struct
-func BashStreamLabel(cmd string, stdout bool, stderr bool, label string) (res BashResult) {
-	res.Stdout, res.Stderr, res.Err = runBash(cmd, stdout, stderr, label)
-	return
+// StdinReader
+type stdinReader struct {
+	lines chan []byte
 }
 
-// Run a bash command with special options.
-//
-// "cmd" is the bash command, "sOut" indicates whether to stream the stdout,
-// "sErr" indicates whether to stream the stderr, and "l" is the label of
-// any stream
-func runBash(cmd string, sOut bool, sErr bool, l string) (stdout string, stderr string, err error) {
-	c := exec.Command(fmt.Sprintf(`bash`), "-c", "-e", cmd)
+func (s *stdinReader) Read(p []byte) (int, error) {
+	line, ok := <-s.lines
+	if !ok {
+		return 0, io.EOF
+	}
+	return copy(p, line), nil
 
-	outPipe, err := c.StdoutPipe()
-	if err != nil {
+}
+
+func (b *BashProcess) HandleStdout(handler StdHandler) {
+	if !b.running {
+		b.stdoutHandler = handler
+	}
+}
+
+func (b *BashProcess) HandleStderr(handler StdHandler) {
+	if !b.running {
+		b.stderrHandler = handler
+	}
+}
+
+func (b *BashProcess) CustomStdinWithBufferSize(preload []string, bufferLines int) {
+	if b.running {
 		return
 	}
-
-	errPipe, err := c.StderrPipe()
-	if err != nil {
-		return
+	if preload == nil {
+		preload = []string{}
 	}
 
-	c.Start()
-
-	errs := make(chan error)
-
-	go func() {
-		var err error
-		stdout, err = readShell(bufio.NewReader(outPipe), sOut, l)
-		if err != nil {
-			errs <- err
-		}
-	}()
-	go func() {
-		var err error
-		stderr, err = readShell(bufio.NewReader(errPipe), sErr, l)
-		if err != nil {
-			errs <- err
-		}
-	}()
-
-	// wait for the above goroutines to complete
-	err = c.Wait()
-
-	// pick up any errors
-	select {
-	case err = <-errs:
-	default:
+	b.stdinReader = &stdinReader{}
+	b.stdinReader.lines = make(chan []byte, bufferLines)
+	for _, line := range preload {
+		b.stdinReader.lines <- []byte(line)
 	}
-
-	return
 }
 
-// go routine to parse the output of a shell
-func readShell(r *bufio.Reader, stream bool, label string) (output string, err error) {
-	strs := make(chan string)
-	errs := make(chan error)
-	done := make(chan int)
+func (b *BashProcess) CustomStdin(preload []string) {
+	b.CustomStdinWithBufferSize(preload, len(preload)+16)
+}
 
-	go func() {
-		defer func() { done <- 0 }()
-		for {
-			line, _, err := r.ReadLine()
+func (b *BashProcess) Stdin(line string) {
+	if b.running && b.stdinReader != nil && b.stdinReader.lines != nil {
+		b.stdinReader.lines <- []byte(line)
+	}
+}
 
-			if err != nil {
-				if err != io.EOF {
-					errs <- err
-				}
-				break
-			}
-			strs <- string(line)
-		}
-	}()
+// ProcessState returns the underlying *os.ProcessState of the cmd object. Will return
+// nil if Exec has not been called
+func (b *BashProcess) ProcessState() *os.ProcessState {
+	if b.command != nil {
+		return b.command.ProcessState
+	}
+	return nil
+}
 
-	v := true
-	for v {
-		select {
+func (b *BashProcess) Process() *os.Process {
+	if b.command != nil {
+		return b.command.Process
+	}
+	return nil
+}
 
-		case err = <-errs:
-			v = false
-		case <-done:
-			v = false
-		case s := <-strs:
-			if stream {
-				fmt.Printf("%s%s%s", label, s, Sep())
-			}
-			output = fmt.Sprintf("%s%s\n", output, s)
-		default:
+func (b *BashProcess) Exec(cmd string) error {
+	if b.running {
+		return fmt.Errorf("Cannot exec command. Already running")
+	}
+
+	b.command = exec.Command("bash", "-c", "-e", cmd)
+
+	// if no stdout handler is defined, then default to printing to stdout
+	if b.stdoutHandler == nil {
+		b.command.Stdout = os.Stdout
+	} else {
+		b.command.Stdout = &customStdWriter{
+			handler: b.stdoutHandler,
 		}
 	}
-	return
+
+	// if no stderr handler is defined, then default to printing to stderr
+	if b.stderrHandler == nil {
+		b.command.Stderr = os.Stderr
+	} else {
+		b.command.Stderr = &customStdWriter{
+			handler: b.stderrHandler,
+		}
+	}
+
+	// if no inputs overwrite stdin, then default to reading from stdin
+	if b.stdinReader == nil {
+		b.command.Stdin = os.Stdin
+	} else {
+		b.command.Stdin = b.stdinReader
+
+	}
+	b.running = true
+
+	// check if process has exited
+	go func() {
+		for b.command.ProcessState.ExitCode() < 0 {
+		}
+		b.running = false
+		if b.stdinReader.lines != nil {
+			close(b.stdinReader.lines)
+		}
+	}()
+	return b.command.Run()
+}
+
+func Bash() *BashProcess {
+	return &BashProcess{
+		stdinReader:   nil,
+		stdoutHandler: nil,
+		stderrHandler: nil,
+		running:       false,
+	}
 }
 
 func Sep() string {

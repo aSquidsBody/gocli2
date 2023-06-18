@@ -39,7 +39,7 @@ type Middleware func(ctx *Context)
 
 func (c *Command) fullName() string {
 	if c.node.parent != nil {
-		return fmt.Sprintf("%s %s", c.node.parent.value.Name, c.Name)
+		return fmt.Sprintf("%s %s", c.node.parent.value.fullName(), c.Name)
 	}
 	return filepath.Base(os.Args[0])
 }

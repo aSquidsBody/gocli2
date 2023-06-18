@@ -185,25 +185,24 @@ func getHelpStr(optionsMap map[string]*option, arguments []*argument, c *Command
 	sort.Sort(Bylong(options))
 
 	padding := 5
-	txt := ""
 
-	txt += fmt.Sprintf("Usage: %s", c.fullName())
+	usage := fmt.Sprintf("Usage: %s", c.fullName())
 	if len(c.node.children) > 0 {
-		txt += " [" + Magenta("COMMAND") + "]"
+		usage += " [" + Magenta("COMMAND") + "]"
 	}
 
 	if len(options) > 0 {
-		txt += " [" + Green("OPTIONS") + "]"
+		usage += " [" + Green("OPTIONS") + "]"
 	}
 
 	if len(arguments) > 0 {
 		for _, argument := range arguments {
-			txt += fmt.Sprintf(" %s", Yellow(argument.name))
+			usage += fmt.Sprintf(" %s", Yellow(argument.name))
 		}
 	}
 
-	txt += Sep()
-
+	lines := strings.Repeat("-", len(usage)) + Sep()
+	txt := lines + usage + "\n" + lines
 	if c.LongDesc != "" {
 		txt += c.LongDesc
 		txt += Sep()
